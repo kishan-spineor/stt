@@ -1,48 +1,39 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
-# from pymongo import MongoClient
-# from mongo_conn import transcription_collection
 import os
 import threading
 import queue
 import uuid
+import json
 from google.cloud import speech
 from google.cloud import translate_v2 as translate
-
-# === Configuration ===
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "prince-speechtotext-3fd7ef9828b8.json"
-
-import json
 from google.oauth2 import service_account
 
-# Load the credentials from the env var
+# === Load Google Cloud Credentials from JSON in environment variable ===
 raw_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
 
-# Parse it into a dictionary
 try:
     credentials_info = json.loads(raw_json)
 except json.JSONDecodeError as e:
     print(f"Failed to decode credentials JSON: {e}")
     raise
 
-# Now use it to create credentials
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
 
+# Initialize Google Cloud clients with credentials
+translate_client = translate.Client(credentials=credentials)
 
+# === Flask & SocketIO Setup ===
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
-
-# translate_client = translate.Client()
-
+# === Constants and Data Stores ===
 RATE = 48000
 clients = {}
 transcripts = {}
 
-# @app.route('/')
-# def index():
-#     return render_template('index.html')
+# === Socket.IO Handlers ===
 
 @socketio.on('connect')
 def handle_connect(auth):
@@ -65,7 +56,7 @@ def handle_connect(auth):
 
     # Only for speaker
     q = queue.Queue()
-    client = speech.SpeechClient()
+    client = speech.SpeechClient(credentials=credentials)
 
     config = speech.RecognitionConfig(
         encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
@@ -101,7 +92,6 @@ def handle_connect(auth):
                     transcripts[sid].append(transcript_text)
                     full_text = ' '.join(transcripts[sid])
 
-                    # Send to listeners (with translation)
                     for cid, info in clients.items():
                         if info['role'] == 'listener':
                             target_lang = info.get('language', 'hi')
@@ -123,7 +113,6 @@ def handle_connect(auth):
                                 'language': target_lang
                             }, to=cid)
 
-                    # Send original to speaker
                     socketio.emit('transcript', {
                         'text': full_text,
                         'final': True,
@@ -137,7 +126,6 @@ def handle_connect(auth):
                     if transcript_text != previous:
                         partial_text = ' '.join(transcripts[sid]) + " " + transcript_text
 
-                        # Send to listeners (with translation)
                         for cid, info in clients.items():
                             if info['role'] == 'listener':
                                 target_lang = info.get('language', 'hi')
@@ -159,7 +147,6 @@ def handle_connect(auth):
                                     'language': target_lang
                                 }, to=cid)
 
-                        # Send original to speaker
                         socketio.emit('transcript', {
                             'text': partial_text,
                             'final': False,
@@ -171,7 +158,6 @@ def handle_connect(auth):
         except Exception as e:
             print(f"[ERROR] Streaming failed for sid={sid}: {e}")
 
-    # Start background thread
     clients[sid]['queue'] = q
     clients[sid]['thread'] = threading.Thread(target=transcribe_thread)
     clients[sid]['thread'].start()
@@ -191,8 +177,6 @@ def handle_stop_audio():
         print(f"[STOP AUDIO] sid={sid}")
         clients[sid]['queue'].put(None)
         clients[sid]['thread'].join()
-
-
         clients.pop(sid, None)
         transcripts.pop(sid, None)
 
@@ -207,6 +191,15 @@ def handle_disconnect():
         clients.pop(sid, None)
         transcripts.pop(sid, None)
 
+@socketio.on('update_languages')
+def handle_update_languages(data):
+    sid = request.sid
+    new_languages = data.get('languages', 'hi')
+    if sid in clients and clients[sid]['role'] == 'listener':
+        clients[sid]['language'] = new_languages
+        print(f"[LANGUAGES UPDATED] sid={sid}, new_languages={new_languages}")
+
+# REST API endpoint to receive final transcript externally
 @app.route('/receive_transcript', methods=['POST'])
 def receive_transcript():
     data = request.json
@@ -214,17 +207,6 @@ def receive_transcript():
     text = data.get("text")
     print(f"[API RECEIVED] uuid={uuid_val}, text={text}")
     return jsonify({"status": "received"}), 200
-
-
-
-@socketio.on('update_languages')
-def handle_update_languages(data):
-    sid = request.sid
-    new_languages = data.get('languages','hi')
-    if sid in clients and clients[sid]['role'] == 'listener':
-        clients[sid]['languages'] = new_languages
-        print(f"[LANGUAGES UPDATED] sid={sid}, new_languages={new_languages}")
-
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
