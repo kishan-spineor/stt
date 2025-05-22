@@ -18,7 +18,7 @@ from google.oauth2 import service_account
 # Load the credentials from the env var
 credentials_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
-
+translate_client = translate.Client(credentials=credentials)
 
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
