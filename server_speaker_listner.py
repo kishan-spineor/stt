@@ -22,7 +22,8 @@ translate_client = translate.Client(credentials=credentials)
 
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*")
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+
 # translate_client = translate.Client()
 
 RATE = 48000
@@ -181,23 +182,6 @@ def handle_stop_audio():
         clients[sid]['queue'].put(None)
         clients[sid]['thread'].join()
 
-        # final_text = "\n".join(transcripts.get(sid, []))
-        # if final_text.strip():
-        #     speaker_uuid = clients[sid]['uuid']
-        #     filename = f"transcript_{speaker_uuid}.txt"
-        #     with open(filename, "a", encoding="utf-8") as f:
-        #         f.write(final_text + "\n")
-        #     print(f"[TRANSCRIPT SAVED] {filename}")
-
-            # MongoDB logic (optional)
-            # result = transcription_collection.update_one(
-            #     {'uuid': speaker_uuid},
-            #     {'$push': {'transcripts': final_text}},
-            #     upsert=True
-            # )
-            # print(f"[MONGO UPDATE RESULT] {result.raw_result}")
-        # else:
-        #     print("[WARNING] No transcript to save.")
 
         clients.pop(sid, None)
         transcripts.pop(sid, None)
@@ -233,6 +217,4 @@ def handle_update_languages(data):
 
 
 if __name__ == '__main__':
-
-    port = int(os.environ.get("PORT", 5000))  # use PORT from Render
-    app.run(host='0.0.0.0', port=port)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
