@@ -3,3 +3,4 @@ Flask-SocketIO
 eventlet
 google-cloud-speech
 google-cloud-translate
+google-auth
