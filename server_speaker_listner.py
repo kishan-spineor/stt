@@ -22,7 +22,8 @@ translate_client = translate.Client(credentials=credentials)
 
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='gevent')
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
 
 # translate_client = translate.Client()
 
