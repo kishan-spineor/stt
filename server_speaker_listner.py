@@ -8,6 +8,7 @@ from flask_socketio import SocketIO, emit
 from google.cloud import speech
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
+import base64
 
 # === Load Google Cloud Credentials from JSON stored in env variable ===
 raw_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
@@ -159,16 +160,22 @@ def handle_connect(auth):
     thread.start()
 
 
+
+
 @socketio.on('audio_chunk')
-def handle_audio_chunk(data):
-    """
-    Receive raw audio bytes from the speaker and enqueue for transcription.
-    Expected `data` is raw bytes from frontend.
-    """
+def handle_audio_chunk(chunk):
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
-        if data:
-            clients[sid]['queue'].put(data)
+        if chunk:
+            # If chunk is base64 encoded string, decode it
+            if isinstance(chunk, str):
+                try:
+                    chunk = base64.b64decode(chunk)
+                except Exception as e:
+                    print(f"[AUDIO CHUNK DECODE ERROR] sid={sid}: {e}")
+                    return
+            clients[sid]['queue'].put(chunk)
+
 
 
 @socketio.on('stop_audio')
