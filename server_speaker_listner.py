@@ -16,11 +16,17 @@ import json
 from google.oauth2 import service_account
 
 # Load the credentials from the env var
-raw_creds = os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON']
-credentials_info = json.loads(raw_creds)  # ✅ Convert string to dict
+raw_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+
+# Parse it into a dictionary
+try:
+    credentials_info = json.loads(raw_json)
+except json.JSONDecodeError as e:
+    print(f"Failed to decode credentials JSON: {e}")
+    raise
+
+# Now use it to create credentials
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
-print(type(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON']))  # should be <class 'str'>
-print(type(json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])))  # should be <class 'dict'>
 
 
 app = Flask(__name__)
