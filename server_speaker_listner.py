@@ -163,10 +163,12 @@ def handle_connect(auth):
     clients[sid]['thread'].start()
 
 @socketio.on('audio_chunk')
-def handle_audio_chunk(data):
+def handle_audio_chunk(chunk):
+    """
+    Accept raw bytes chunk directly, not wrapped in an object.
+    """
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
-        chunk = data.get("chunk")
         if chunk:
             clients[sid]['queue'].put(chunk)
 
