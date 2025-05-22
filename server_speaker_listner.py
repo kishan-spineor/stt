@@ -26,13 +26,22 @@ translate_client = translate.Client(credentials=credentials)
 
 # === Flask & SocketIO Setup ===
 app = Flask(__name__)
-app.secret_key = 'temporary_secret_key'  # For production, use a secure random key
+app.secret_key = 'temporary_secret_key'  # Replace with secure key in production
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # === Constants and Data Stores ===
-RATE = 48000  # Audio sample rate
-clients = {}  # sid -> client info dict
+RATE = 48000  # Audio sample rate in Hz
+clients = {}  # sid -> client info dictionary
 transcripts = {}  # sid -> list of finalized transcript strings
+
+# === Helper: Translate text with error handling ===
+def translate_text(text, target_lang):
+    try:
+        result = translate_client.translate(text, source_language='en', target_language=target_lang)
+        return result.get('translatedText', '')
+    except Exception as e:
+        print(f"[TRANSLATION ERROR] lang={target_lang}: {e}")
+        return ""
 
 # === Socket.IO Event Handlers ===
 
@@ -53,11 +62,11 @@ def handle_connect(auth):
     transcripts[sid] = []
 
     if role != 'speaker':
-        # Listeners don't need further setup
+        # No further setup needed for listeners
         return
 
-    # Speaker-specific setup
-    q = queue.Queue()
+    # For speaker role: set up speech streaming client and background thread
+    audio_queue = queue.Queue()
     client = speech.SpeechClient(credentials=credentials)
 
     config = speech.RecognitionConfig(
@@ -72,7 +81,7 @@ def handle_connect(auth):
 
     def requests_generator():
         while True:
-            chunk = q.get()
+            chunk = audio_queue.get()
             if chunk is None:
                 break
             yield speech.StreamingRecognizeRequest(audio_content=chunk)
@@ -80,7 +89,7 @@ def handle_connect(auth):
     def transcribe_thread():
         try:
             responses = client.streaming_recognize(streaming_config, requests_generator())
-            previous = ""
+            previous_partial = ""
             for response in responses:
                 if not response.results:
                     continue
@@ -90,33 +99,23 @@ def handle_connect(auth):
                 transcript_text = result.alternatives[0].transcript
 
                 if result.is_final:
-                    print(f"[FINAL] sid={sid}: {transcript_text}")
+                    # Append finalized transcript segment
                     transcripts[sid].append(transcript_text)
                     full_text = ' '.join(transcripts[sid])
+                    print(f"[FINAL] sid={sid}: {full_text}")
 
-                    # Broadcast final transcript to all listeners, translated
+                    # Broadcast final transcript (translated) to listeners
                     for cid, info in clients.items():
                         if info['role'] == 'listener':
-                            target_lang = info.get('language', 'hi')
-                            try:
-                                translation_result = translate_client.translate(
-                                    full_text,
-                                    source_language='en',
-                                    target_language=target_lang
-                                )
-                                translated_text = translation_result['translatedText']
-                            except Exception as e:
-                                print(f"[TRANSLATION ERROR] sid={cid}, lang={target_lang}: {e}")
-                                translated_text = ""
-
+                            translated = translate_text(full_text, info.get('language', 'hi'))
                             socketio.emit('transcript', {
                                 'text': full_text,
                                 'final': True,
-                                'translated_text': translated_text,
-                                'language': target_lang
+                                'translated_text': translated,
+                                'language': info.get('language', 'hi')
                             }, to=cid)
 
-                    # Also emit original English final transcript to speaker
+                    # Also send original English final transcript to speaker
                     socketio.emit('transcript', {
                         'text': full_text,
                         'final': True,
@@ -124,35 +123,23 @@ def handle_connect(auth):
                         'language': 'en'
                     }, to=sid)
 
-                    previous = ""
+                    previous_partial = ""
 
                 else:
-                    # Interim partial result - send partial updates only if changed
-                    if transcript_text != previous:
+                    # Interim result, send only if changed
+                    if transcript_text != previous_partial:
                         partial_text = ' '.join(transcripts[sid]) + " " + transcript_text
 
                         for cid, info in clients.items():
                             if info['role'] == 'listener':
-                                target_lang = info.get('language', 'hi')
-                                try:
-                                    translation_result = translate_client.translate(
-                                        partial_text,
-                                        source_language='en',
-                                        target_language=target_lang
-                                    )
-                                    translated_text = translation_result['translatedText']
-                                except Exception as e:
-                                    print(f"[TRANSLATION ERROR] sid={cid}, lang={target_lang}: {e}")
-                                    translated_text = ""
-
+                                translated = translate_text(partial_text, info.get('language', 'hi'))
                                 socketio.emit('transcript', {
                                     'text': partial_text,
                                     'final': False,
-                                    'translated_text': translated_text,
-                                    'language': target_lang
+                                    'translated_text': translated,
+                                    'language': info.get('language', 'hi')
                                 }, to=cid)
 
-                        # Also emit original English partial transcript to speaker
                         socketio.emit('transcript', {
                             'text': partial_text,
                             'final': False,
@@ -160,25 +147,28 @@ def handle_connect(auth):
                             'language': 'en'
                         }, to=sid)
 
-                        previous = transcript_text
+                        previous_partial = transcript_text
+
         except Exception as e:
             print(f"[ERROR] Streaming failed for sid={sid}: {e}")
 
-    # Store queue and thread info for this speaker
-    clients[sid]['queue'] = q
-    clients[sid]['thread'] = threading.Thread(target=transcribe_thread, daemon=True)
-    clients[sid]['thread'].start()
+    # Save queue and thread info for this speaker client
+    clients[sid]['queue'] = audio_queue
+    thread = threading.Thread(target=transcribe_thread, daemon=True)
+    clients[sid]['thread'] = thread
+    thread.start()
 
 
 @socketio.on('audio_chunk')
-def handle_audio_chunk(chunk):
+def handle_audio_chunk(data):
     """
     Receive raw audio bytes from the speaker and enqueue for transcription.
+    Expected `data` is raw bytes from frontend.
     """
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
-        if chunk:
-            clients[sid]['queue'].put(chunk)
+        if data:
+            clients[sid]['queue'].put(data)
 
 
 @socketio.on('stop_audio')
@@ -186,9 +176,11 @@ def handle_stop_audio():
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
         print(f"[STOP AUDIO] sid={sid}")
-        clients[sid]['queue'].put(None)  # Signal to stop the generator
+        clients[sid]['queue'].put(None)  # Signal generator to stop
         if clients[sid]['thread']:
             clients[sid]['thread'].join()
+
+        # Clean up after speaker disconnects or stops
         clients.pop(sid, None)
         transcripts.pop(sid, None)
 
@@ -215,7 +207,7 @@ def handle_update_languages(data):
         print(f"[LANGUAGE UPDATED] sid={sid}, new_language={new_language}")
 
 
-# REST API endpoint to receive final transcript externally
+# REST API endpoint to receive final transcript externally (optional)
 @app.route('/receive_transcript', methods=['POST'])
 def receive_transcript():
     data = request.json
