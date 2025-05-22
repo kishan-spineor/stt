@@ -10,7 +10,16 @@ from google.cloud import speech
 from google.cloud import translate_v2 as translate
 
 # === Configuration ===
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "prince-speechtotext-3fd7ef9828b8.json"
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "prince-speechtotext-3fd7ef9828b8.json"
+
+import json
+from google.oauth2 import service_account
+
+# Load the credentials from the env var
+credentials_info = json.loads(os.environ['GOOGLE_APPLICATION_CREDENTIALS_JSON'])
+credentials = service_account.Credentials.from_service_account_info(credentials_info)
+
+
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*")
