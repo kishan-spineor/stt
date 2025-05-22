@@ -1,22 +1,23 @@
+import os
+import json
+import uuid
+import queue
+import threading
 from flask import Flask, request, jsonify
 from flask_socketio import SocketIO, emit
-import os
-import threading
-import queue
-import uuid
-import json
 from google.cloud import speech
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
 
-# === Load Google Cloud Credentials from JSON in environment variable ===
+# === Load Google Cloud Credentials from JSON stored in env variable ===
 raw_json = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS_JSON')
+if not raw_json:
+    raise RuntimeError("Environment variable GOOGLE_APPLICATION_CREDENTIALS_JSON not set")
 
 try:
     credentials_info = json.loads(raw_json)
 except json.JSONDecodeError as e:
-    print(f"Failed to decode credentials JSON: {e}")
-    raise
+    raise RuntimeError(f"Failed to decode credentials JSON: {e}")
 
 credentials = service_account.Credentials.from_service_account_info(credentials_info)
 
@@ -25,15 +26,15 @@ translate_client = translate.Client(credentials=credentials)
 
 # === Flask & SocketIO Setup ===
 app = Flask(__name__)
-app.secret_key = 'temporary_secret_key'
+app.secret_key = 'temporary_secret_key'  # For production, use a secure random key
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # === Constants and Data Stores ===
-RATE = 48000
-clients = {}
-transcripts = {}
+RATE = 48000  # Audio sample rate
+clients = {}  # sid -> client info dict
+transcripts = {}  # sid -> list of finalized transcript strings
 
-# === Socket.IO Handlers ===
+# === Socket.IO Event Handlers ===
 
 @socketio.on('connect')
 def handle_connect(auth):
@@ -52,9 +53,10 @@ def handle_connect(auth):
     transcripts[sid] = []
 
     if role != 'speaker':
+        # Listeners don't need further setup
         return
 
-    # Only for speaker
+    # Speaker-specific setup
     q = queue.Queue()
     client = speech.SpeechClient(credentials=credentials)
 
@@ -92,6 +94,7 @@ def handle_connect(auth):
                     transcripts[sid].append(transcript_text)
                     full_text = ' '.join(transcripts[sid])
 
+                    # Broadcast final transcript to all listeners, translated
                     for cid, info in clients.items():
                         if info['role'] == 'listener':
                             target_lang = info.get('language', 'hi')
@@ -113,6 +116,7 @@ def handle_connect(auth):
                                 'language': target_lang
                             }, to=cid)
 
+                    # Also emit original English final transcript to speaker
                     socketio.emit('transcript', {
                         'text': full_text,
                         'final': True,
@@ -123,6 +127,7 @@ def handle_connect(auth):
                     previous = ""
 
                 else:
+                    # Interim partial result - send partial updates only if changed
                     if transcript_text != previous:
                         partial_text = ' '.join(transcripts[sid]) + " " + transcript_text
 
@@ -147,6 +152,7 @@ def handle_connect(auth):
                                     'language': target_lang
                                 }, to=cid)
 
+                        # Also emit original English partial transcript to speaker
                         socketio.emit('transcript', {
                             'text': partial_text,
                             'final': False,
@@ -158,29 +164,34 @@ def handle_connect(auth):
         except Exception as e:
             print(f"[ERROR] Streaming failed for sid={sid}: {e}")
 
+    # Store queue and thread info for this speaker
     clients[sid]['queue'] = q
-    clients[sid]['thread'] = threading.Thread(target=transcribe_thread)
+    clients[sid]['thread'] = threading.Thread(target=transcribe_thread, daemon=True)
     clients[sid]['thread'].start()
+
 
 @socketio.on('audio_chunk')
 def handle_audio_chunk(chunk):
     """
-    Accept raw bytes chunk directly, not wrapped in an object.
+    Receive raw audio bytes from the speaker and enqueue for transcription.
     """
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
         if chunk:
             clients[sid]['queue'].put(chunk)
 
+
 @socketio.on('stop_audio')
 def handle_stop_audio():
     sid = request.sid
     if sid in clients and clients[sid]['queue']:
         print(f"[STOP AUDIO] sid={sid}")
-        clients[sid]['queue'].put(None)
-        clients[sid]['thread'].join()
+        clients[sid]['queue'].put(None)  # Signal to stop the generator
+        if clients[sid]['thread']:
+            clients[sid]['thread'].join()
         clients.pop(sid, None)
         transcripts.pop(sid, None)
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
@@ -189,17 +200,20 @@ def handle_disconnect():
         print(f"[DISCONNECTED] sid={sid}")
         if clients[sid]['queue']:
             clients[sid]['queue'].put(None)
-            clients[sid]['thread'].join()
+            if clients[sid]['thread']:
+                clients[sid]['thread'].join()
         clients.pop(sid, None)
         transcripts.pop(sid, None)
+
 
 @socketio.on('update_languages')
 def handle_update_languages(data):
     sid = request.sid
-    new_languages = data.get('languages', 'hi')
-    if sid in clients and clients[sid]['role'] == 'listener':
-        clients[sid]['language'] = new_languages
-        print(f"[LANGUAGES UPDATED] sid={sid}, new_languages={new_languages}")
+    new_language = data.get('language')
+    if sid in clients and clients[sid]['role'] == 'listener' and new_language:
+        clients[sid]['language'] = new_language
+        print(f"[LANGUAGE UPDATED] sid={sid}, new_language={new_language}")
+
 
 # REST API endpoint to receive final transcript externally
 @app.route('/receive_transcript', methods=['POST'])
@@ -209,6 +223,7 @@ def receive_transcript():
     text = data.get("text")
     print(f"[API RECEIVED] uuid={uuid_val}, text={text}")
     return jsonify({"status": "received"}), 200
+
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True)
