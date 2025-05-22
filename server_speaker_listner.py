@@ -29,9 +29,9 @@ RATE = 48000
 clients = {}
 transcripts = {}
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+# @app.route('/')
+# def index():
+#     return render_template('index.html')
 
 @socketio.on('connect')
 def handle_connect(auth):
