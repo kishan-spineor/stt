@@ -23,7 +23,7 @@ translate_client = translate.Client(credentials=credentials)
 app = Flask(__name__)
 app.secret_key = 'temporary_secret_key'
 socketio = SocketIO(app, cors_allowed_origins="*")
-translate_client = translate.Client()
+# translate_client = translate.Client()
 
 RATE = 48000
 clients = {}
