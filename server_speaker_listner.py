@@ -233,4 +233,6 @@ def handle_update_languages(data):
 
 
 if __name__ == '__main__':
-    socketio.run(app, port=5000, debug=True, allow_unsafe_werkzeug=True)
+
+    port = int(os.environ.get("PORT", 5000))  # use PORT from Render
+    app.run(host='0.0.0.0', port=port)
