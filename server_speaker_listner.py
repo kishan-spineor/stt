@@ -119,7 +119,7 @@ def handle_connect(auth):
                                 'translated_text': translated,
                                 'language': info.get('language', 'hi')
                             }
-                            logger.info(f"[EMIT TO LISTENER] sid={cid}, data={emit_data}")
+                            # logger.info(f"[EMIT TO LISTENER] sid={cid}, data={emit_data}")
                             socketio.emit('transcript', emit_data, to=cid)
 
                     socketio.emit('transcript', {
@@ -128,10 +128,20 @@ def handle_connect(auth):
                         'translated_text': full_text,
                         'language': 'en'
                     }, to=sid)
+                    kishantiwari={
+                        'text': full_text,
+                        'final': True,
+                        'translated_text': full_text,
+                        'language': 'en'
+                    }
+                    logger.info(f"[EMIT TO LISTENER] sid={cid}, data={kishantiwari}")
+
+                    
 
                     previous_partial = ""
 
                 else:
+                    print("else")
                     if transcript_text != previous_partial:
                         partial_text = ' '.join(transcripts[sid]) + " " + transcript_text
 
