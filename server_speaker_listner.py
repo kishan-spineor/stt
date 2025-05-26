@@ -10,7 +10,7 @@ from flask_socketio import SocketIO, emit
 from google.cloud import speech
 from google.cloud import translate_v2 as translate
 from google.oauth2 import service_account
-from flask_cors import CORS
+
 
 # === Logging Setup ===
 logging.basicConfig(
