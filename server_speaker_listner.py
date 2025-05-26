@@ -38,7 +38,7 @@ translate_client = translate.Client(credentials=credentials)
 app = Flask(__name__)
 # CORS(app, supports_credentials=True)
 app.secret_key = 'temporary_secret_key'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet',transports=["websocket"])
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # === Constants and Stores ===
 RATE = 48000
